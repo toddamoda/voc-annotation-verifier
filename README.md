@@ -7,7 +7,7 @@ A tool for verifying and managing annotations in Pascal VOC format.
 You can install this tool directly from GitHub:
 
 ```
-pip install git+https://github.com/yourusername/voc-annotation-verifier.git
+pip install git+https://github.com/toddamoda/voc-annotation-verifier.git
 ```
 
 ## Usage
