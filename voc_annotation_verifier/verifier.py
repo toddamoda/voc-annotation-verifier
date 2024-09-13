@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 import shutil
 import sys
+import json
 
 class AnnotationVerifier:
     def __init__(self, dataset_path):
@@ -22,7 +23,8 @@ class AnnotationVerifier:
         self.total_samples = self.count_samples()
         self.processed_samples = 0
         self.kept_samples = 0
-        self.load_next_sample()
+        self.state_file = os.path.join(dataset_path, 'verifier_state.json')
+        self.load_state()
 
     def count_samples(self):
         total = 0
@@ -30,6 +32,77 @@ class AnnotationVerifier:
             subset_dir = os.path.join(self.dataset_path, subset)
             total += len([f for f in os.listdir(subset_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))])
         return total
+
+    def save_state(self):
+        state = {
+            'history': self.history,
+            'removed_samples': self.removed_samples,
+            'processed_samples': self.processed_samples,
+            'kept_samples': self.kept_samples
+        }
+        with open(self.state_file, 'w') as f:
+            json.dump(state, f)
+        print("State saved.")
+
+    def initialize_current_sample(self):
+        subsets = ['train', 'validation']
+        self.current_subset = random.choice(subsets)
+        subset_dir = os.path.join(self.dataset_path, self.current_subset)
+        image_files = [f for f in os.listdir(subset_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        if image_files:
+            self.current_image = random.choice(image_files)
+            self.current_xml = os.path.splitext(self.current_image)[0] + '.xml'
+            self.history.append((self.current_subset, self.current_image))
+        else:
+            print(f"No images found in {self.current_subset} set.")
+
+    def load_state(self):
+        if os.path.exists(self.state_file):
+            with open(self.state_file, 'r') as f:
+                state = json.load(f)
+            self.history = state['history']
+            self.processed_samples = state['processed_samples']
+            self.kept_samples = state['kept_samples']
+            
+            # Sync removed_samples with actual content of defective directory
+            self.removed_samples = self.get_defective_samples()
+            
+            print(f"Loaded state: Processed {self.processed_samples} samples, Kept {self.kept_samples}, Removed {len(self.removed_samples)}")
+        else:
+            print("No previous state found. Starting from the beginning.")
+        
+        if not self.current_subset:
+            self.initialize_current_sample()
+
+    def get_defective_samples(self):
+        defective_samples = []
+        defective_dir = os.path.join(self.dataset_path, 'defective')
+        if os.path.exists(defective_dir):
+            for subset in ['train', 'validation']:
+                subset_dir = os.path.join(defective_dir, subset)
+                if os.path.exists(subset_dir):
+                    for img in os.listdir(subset_dir):
+                        if img.lower().endswith(('.png', '.jpg', '.jpeg')):
+                            defective_samples.append((subset, img))
+        return defective_samples
+
+    def keep_sample(self):
+        if self.review_mode:
+            sample = (self.current_subset, self.current_image)
+            if sample in self.removed_samples:
+                src_dir = os.path.join(self.dataset_path, 'defective', self.current_subset)
+                dst_dir = os.path.join(self.dataset_path, self.current_subset)
+                if self.move_sample(src_dir, dst_dir):
+                    self.removed_samples.remove(sample)
+                    self.kept_samples += 1
+                    print(f"Restored sample: {self.current_image}")
+                else:
+                    print(f"Failed to restore sample: {self.current_image}")
+            else:
+                print(f"Sample {self.current_image} is not in the removed list. Skipping restoration.")
+        else:
+            self.kept_samples += 1
+            print(f"Keeping sample: {self.current_image}")
 
     def load_next_sample(self):
         if self.review_mode:
@@ -41,10 +114,11 @@ class AnnotationVerifier:
             else:
                 self.review_mode = False
                 self.review_index = 0
+                print("Review completed. Returning to normal mode.")
                 return self.load_next_sample()
 
         subsets = ['train', 'validation']
-        if not self.history or random.random() < 0.5:
+        if not self.current_subset or random.random() < 0.5:
             self.current_subset = random.choice(subsets)
         
         subset_dir = os.path.join(self.dataset_path, self.current_subset)
@@ -60,6 +134,21 @@ class AnnotationVerifier:
         self.processed_samples += 1
         
         return self.visualize_sample()
+
+    def toggle_review_mode(self):
+        if self.review_mode:
+            self.review_mode = False
+            self.review_index = 0
+            print("Exiting review mode.")
+            return self.load_next_sample()
+        elif self.removed_samples:
+            self.review_mode = True
+            self.review_index = 0
+            print("Entering review mode.")
+            return self.load_next_sample()
+        else:
+            print("No removed samples to review.")
+            return True
 
     def load_previous_sample(self):
         if self.review_mode:
@@ -87,6 +176,10 @@ class AnnotationVerifier:
             image_path = os.path.join(self.dataset_path, self.current_subset, self.current_image)
             xml_path = os.path.join(self.dataset_path, self.current_subset, self.current_xml)
         
+        if not os.path.exists(image_path):
+            print(f"Image not found: {image_path}")
+            return False
+
         image = cv2.imread(image_path)
         if image is None:
             print(f"Failed to load image: {image_path}")
@@ -112,10 +205,9 @@ class AnnotationVerifier:
         status = "REVIEW MODE: " if review else ""
         self.put_text_with_background(image, f"{status}{self.current_subset}: {self.current_image}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), (0, 0, 0))
         
-        instructions = "Press 'k' to keep, 'r' to remove, 'n' for next, 'p' for previous, 'v' to review removed, 'q' to quit"
+        instructions = "Press 'k' to keep, 'r' to remove, 'n' for next, 'p' for previous, 'v' to toggle review mode, 's' to save state, 'q' to quit"
         self.put_text_with_background(image, instructions, (10, image.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), (0, 0, 0))
         
-        # Add progress information
         progress_text = f"Total: {self.total_samples}, Processed: {self.processed_samples}, Kept: {self.kept_samples}, Removed: {len(self.removed_samples)}"
         self.put_text_with_background(image, progress_text, (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), (0, 0, 0))
         
@@ -129,19 +221,7 @@ class AnnotationVerifier:
         cv2.rectangle(img, (x, y - text_h - 5), (x + text_w, y + 5), bg_color, -1)
         cv2.putText(img, text, (x, y), font, font_scale, text_color, 1, cv2.LINE_AA)
 
-    def keep_sample(self):
-        if self.review_mode:
-            src_dir = os.path.join(self.dataset_path, 'defective', self.current_subset)
-            dst_dir = os.path.join(self.dataset_path, self.current_subset)
-            if self.move_sample(src_dir, dst_dir):
-                self.removed_samples.remove((self.current_subset, self.current_image))
-                self.kept_samples += 1
-                print(f"Restored sample: {self.current_image}")
-            else:
-                print(f"Failed to restore sample: {self.current_image}")
-        else:
-            self.kept_samples += 1
-            print(f"Keeping sample: {self.current_image}")
+
 
     def remove_sample(self):
         if not self.review_mode:
@@ -170,22 +250,20 @@ class AnnotationVerifier:
             print(f"Error moving files: {e}")
             return False
 
-    def start_review_mode(self):
-        if self.removed_samples:
-            self.review_mode = True
-            self.review_index = 0
-            return self.load_next_sample()
-        else:
-            print("No removed samples to review.")
-            return True
+
 
 def run_annotation_verifier(dataset_path):
     verifier = AnnotationVerifier(dataset_path)
     
+    if not verifier.visualize_sample():
+        print("Failed to load initial sample. Exiting.")
+        return
+
     while True:
         key = cv2.waitKey(0) & 0xFF
         
         if key == ord('q'):
+            verifier.save_state()
             break
         elif key == ord('k'):
             verifier.keep_sample()
@@ -201,7 +279,10 @@ def run_annotation_verifier(dataset_path):
         elif key == ord('p'):
             verifier.load_previous_sample()
         elif key == ord('v'):
-            verifier.start_review_mode()
+            if not verifier.toggle_review_mode():
+                break
+        elif key == ord('s'):
+            verifier.save_state()
     
     cv2.destroyAllWindows()
 
@@ -211,6 +292,15 @@ def main():
         sys.exit(1)
     
     dataset_path = sys.argv[1]
+    
+    print("1. Start from the beginning")
+    print("2. Resume from last session")
+    choice = input("Enter your choice (1 or 2): ")
+    
+    if choice == '2':
+        if not os.path.exists(os.path.join(dataset_path, 'verifier_state.json')):
+            print("No previous session found. Starting from the beginning.")
+    
     run_annotation_verifier(dataset_path)
 
 if __name__ == "__main__":
