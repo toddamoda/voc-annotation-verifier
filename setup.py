@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="annotation-verifier-cv",
+    name="voc-annotation-verifier",
     version="0.1",
     packages=find_packages(),
     install_requires=[
@@ -9,7 +9,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "annotation-verifier-cv=annotation_verifier_cv:run_annotation_verifier",
+            "voc-annotation-verifier=voc_annotation_verifier.verifier:main",
         ],
     },
 )

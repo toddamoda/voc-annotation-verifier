@@ -4,6 +4,7 @@ import xml.etree.ElementTree as ET
 import cv2
 import numpy as np
 import shutil
+import sys
 
 class AnnotationVerifier:
     def __init__(self, dataset_path):
@@ -103,6 +104,13 @@ def run_annotation_verifier(dataset_path):
     
     cv2.destroyAllWindows()
 
-# if __name__ == "__main__":
-#     dataset_path = "Humandata"  # Change this to your dataset path
-#     run_annotation_verifier(dataset_path)
+def main():
+    if len(sys.argv) != 2:
+        print("Usage: voc-annotation-verifier <path_to_dataset>")
+        sys.exit(1)
+    
+    dataset_path = sys.argv[1]
+    run_annotation_verifier(dataset_path)
+
+if __name__ == "__main__":
+    main()
